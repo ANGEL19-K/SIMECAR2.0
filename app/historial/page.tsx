@@ -1,230 +1,379 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "../../lib/supabase";
-import * as XLSX from "xlsx";
-import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import { supabase } from "../lib/supabase";
 
-export default function Historial() {
+export default function Dashboard() {
   const [usuarioActivo, setUsuarioActivo] = useState<any>(null);
   const [cargandoAuth, setCargandoAuth] = useState(true);
 
-  const [registros, setRegistros] = useState<any[]>([]);
-  const [equipos, setEquipos] = useState<any[]>([]);
-  const [filtroEquipo, setFiltroEquipo] = useState("");
-  const [cargando, setCargando] = useState(true);
+  const [correo, setCorreo] = useState("");
+  const [password, setPassword] = useState("");
+  const [errorLogin, setErrorLogin] = useState("");
 
-  const [registroEditando, setRegistroEditando] = useState<any>(null);
-  const [editFecha, setEditFecha] = useState("");
-  const [editOperador, setEditOperador] = useState("");
-  const [guardandoEdicion, setGuardandoEdicion] = useState(false);
+  const [equipos, setEquipos] = useState<any[]>([]);
+  const [todosLosTecnicos, setTodosLosTecnicos] = useState<any[]>([]);
+  const [todosLosLideres, setTodosLosLideres] = useState<any[]>([]);
+  
+  const [equipoSeleccionado, setEquipoSeleccionado] = useState("");
+  const [proyectoSeleccionado, setProyectoSeleccionado] = useState("");
+  const [tecnicosDelDia, setTecnicosDelDia] = useState<any[]>([]);
+
+  const [fecha, setFecha] = useState("");
+  const [archivos, setArchivos] = useState<any>({});
+  const [guardando, setGuardando] = useState(false);
+
+  const [equipoNoLaboro, setEquipoNoLaboro] = useState(false);
+  const [liderDelDia, setLiderDelDia] = useState(""); 
+  const [liderAsistencia, setLiderAsistencia] = useState("laboro");
+  
+  const [naAtsUnificado, setNaAtsUnificado] = useState(false);
+  const [naPermisoElectrico, setNaPermisoElectrico] = useState(false);
+  const [naPermisoAlturas, setNaPermisoAlturas] = useState(false);
+  const [naAtsEntel, setNaAtsEntel] = useState(false);
+
+  const [creandoNuevo, setCreandoNuevo] = useState(false);
+  const [nuevoNombre, setNuevoNombre] = useState("");
+  const [nuevoDni, setNuevoDni] = useState("");
+
+  const [creandoTeam, setCreandoTeam] = useState(false);
+  const [nuevoNombreTeam, setNuevoNombreTeam] = useState("");
 
   useEffect(() => {
     const sesion = localStorage.getItem("simecar_sesion");
-    if (sesion) setUsuarioActivo(JSON.parse(sesion)); else window.location.href = "/";
+    if (sesion) setUsuarioActivo(JSON.parse(sesion));
     setCargandoAuth(false);
   }, []);
 
-  const cargarHistorial = async () => {
-    setCargando(true);
-    const { data: dataRegistros } = await supabase.from("registros_diarios").select(`*, equipo:equipos (nombre_team)`).order("fecha", { ascending: false });
-    if (dataRegistros) setRegistros(dataRegistros);
-    const { data: dataEquipos } = await supabase.from("equipos").select("id, nombre_team");
+  const iniciarSesion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorLogin("");
+    const { data } = await supabase.from("usuarios_sistema").select("*").eq("correo", correo).eq("password", password).single();
+    if (data) {
+      localStorage.setItem("simecar_sesion", JSON.stringify(data));
+      setUsuarioActivo(data);
+    } else {
+      setErrorLogin("Credenciales incorrectas. Verifique su acceso.");
+    }
+  };
+
+  const cerrarSesion = () => {
+    localStorage.removeItem("simecar_sesion");
+    setUsuarioActivo(null);
+    setCorreo(""); setPassword("");
+  };
+
+  const cargarDatos = async () => {
+    const { data: dataEquipos } = await supabase.from("equipos").select(`id, nombre_team, lider:trabajadoress!equipos_lider_id_fkey (id, nombres_apellidos, dni), equipo_tecnicos (tecnico:trabajadoress!equipo_tecnicos_tecnico_id_fkey (id, nombres_apellidos, dni))`);
     if (dataEquipos) setEquipos(dataEquipos);
-    setCargando(false);
-  };
-
-  useEffect(() => { if (usuarioActivo) cargarHistorial(); }, [usuarioActivo]);
-
-  const eliminarRegistro = async (id: string) => {
-    const confirmacion = window.confirm("¿Está seguro de que desea eliminar este registro permanentemente?");
-    if (confirmacion) {
-      const { error } = await supabase.from("registros_diarios").delete().eq("id", id);
-      if (!error) setRegistros(registros.filter(r => r.id !== id));
+    
+    const { data: dataTodosLosTrabajadores } = await supabase
+      .from("trabajadoress")
+      .select("id, nombres_apellidos, dni")
+      .order("nombres_apellidos", { ascending: true }); 
+    
+    if (dataTodosLosTrabajadores) {
+      setTodosLosTecnicos(dataTodosLosTrabajadores);
+      setTodosLosLideres(dataTodosLosTrabajadores);
     }
   };
 
-  const abrirModalEdicion = (reg: any) => { setRegistroEditando(reg); setEditFecha(reg.fecha); setEditOperador(reg.proyecto); };
-  const guardarEdicion = async () => {
-    setGuardandoEdicion(true);
-    const { error } = await supabase.from("registros_diarios").update({ fecha: editFecha, proyecto: editOperador }).eq("id", registroEditando.id);
-    if (!error) { setRegistros(registros.map(r => r.id === registroEditando.id ? { ...r, fecha: editFecha, proyecto: editOperador } : r)); setRegistroEditando(null); }
-    setGuardandoEdicion(false);
-  };
+  useEffect(() => { if (usuarioActivo) cargarDatos(); }, [usuarioActivo]);
 
-  // AQUÍ ESTÁN LOS TÍTULOS OFICIALES PARA EL EXCEL
-  const exportarExcel = (tipo: "general" | "por_equipo") => {
-    if (tipo === "por_equipo" && !filtroEquipo) return alert("Seleccione una cuadrilla en el filtro.");
-    let datosAExportar = registros;
-    if (tipo === "por_equipo") {
-      datosAExportar = registros.filter(r => r.equipo_id === filtroEquipo);
-      if (datosAExportar.length === 0) return alert("No existen registros operativos.");
+  useEffect(() => {
+    const eq = equipos.find((e) => e.id === equipoSeleccionado);
+    if (eq) {
+      const tecnicosBase = eq.equipo_tecnicos ? eq.equipo_tecnicos.map((rel: any) => ({ id: rel.tecnico.id, asistencia: "laboro" })) : [];
+      setTecnicosDelDia(tecnicosBase);
+      setLiderDelDia(eq.lider?.id || ""); 
+      setLiderAsistencia("laboro");
+    } else {
+      setTecnicosDelDia([]); setLiderDelDia("");
     }
+  }, [equipoSeleccionado, equipos]);
 
-    const datosMapeados = datosAExportar.map(reg => ({
-      'Fecha Operativa': reg.fecha,
-      'Operador': reg.proyecto,
-      'Cuadrilla': reg.equipo?.nombre_team || 'No Asignado',
-      'Asistencia': reg.observaciones === 'EQUIPO NO LABORÓ EL DÍA DE HOY' ? 'INASISTENCIA' : 'LABORÓ',
-      'Charla de 5 minutos': reg.registro_1_url ? 'Entregado' : 'Falta',
-      'Check list de EPP': reg.registro_2_url ? 'Entregado' : 'Falta',
-      'Check list de herramientas': reg.registro_3_url ? 'Entregado' : 'Falta',
-      'Check list pre uso Sist. Contra caídas': reg.registro_4_url ? 'Entregado' : 'Falta',
-      'Foto con EPPs': reg.foto_epp_url ? 'Entregado' : 'Falta',
-      'ATS Unificado (Claro/Inte/Bitel)': reg.ats_unificado_url === 'N/A' ? 'N/A' : (reg.ats_unificado_url ? 'Entregado' : 'Falta'),
-      'Permiso de trabajo eléctrico (Entel)': reg.permiso_electrico_url === 'N/A' ? 'N/A' : (reg.permiso_electrico_url ? 'Entregado' : 'Falta'),
-      'Permiso de trabajo de altura (Entel)': reg.permiso_alturas_url === 'N/A' ? 'N/A' : (reg.permiso_alturas_url ? 'Entregado' : 'Falta'),
-      'ATS Entel': reg.ats_entel_url === 'N/A' ? 'N/A' : (reg.ats_entel_url ? 'Entregado' : 'Falta')
-    }));
+  const agregarTecnico = () => setTecnicosDelDia([...tecnicosDelDia, { id: "", asistencia: "laboro" }]);
+  const eliminarTecnico = (index: number) => { const nuevaLista = [...tecnicosDelDia]; nuevaLista.splice(index, 1); setTecnicosDelDia(nuevaLista); };
+  const cambiarTecnico = (index: number, campo: string, valor: string) => { const nuevaLista = [...tecnicosDelDia]; nuevaLista[index][campo] = valor; setTecnicosDelDia(nuevaLista); };
 
-    const hoja = XLSX.utils.json_to_sheet(datosMapeados);
-    const libro = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(libro, hoja, "Reporte Simecar");
-    const nombreEquipo = tipo === "por_equipo" ? equipos.find(e => e.id === filtroEquipo)?.nombre_team.replace(/\s/g, '_') : "General";
-    XLSX.writeFile(libro, `Simecar_Reporte_${nombreEquipo}_${new Date().toISOString().split('T')[0]}.xlsx`);
+  const guardarNuevoTecnicoBd = async () => {
+    if (!nuevoNombre || !nuevoDni) return alert("Ingrese nombre y DNI.");
+    const { data, error } = await supabase.from("trabajadoress").insert([{ nombres_apellidos: nuevoNombre, dni: nuevoDni, cargo: "Tecnico" }]).select();
+    if (!error && data) {
+      setTodosLosTecnicos([...todosLosTecnicos, data[0]]);
+      setTodosLosLideres([...todosLosLideres, data[0]]);
+      setTecnicosDelDia([...tecnicosDelDia, { id: data[0].id, asistencia: "laboro" }]);
+      setNuevoNombre(""); setNuevoDni(""); setCreandoNuevo(false);
+    }
   };
 
-  const registrosMostrados = filtroEquipo ? registros.filter(r => r.equipo_id === filtroEquipo) : registros;
-  const totalRegistros = registrosMostrados.length;
-  const inasistencias = registrosMostrados.filter(r => r.observaciones === 'EQUIPO NO LABORÓ EL DÍA DE HOY').length;
-  const operativos = totalRegistros - inasistencias;
-  const datosPastel = [ { name: 'Operativos', value: operativos, color: '#16a34a' }, { name: 'Inasistencias', value: inasistencias, color: '#dc2626' } ];
-  const conteoPorTeam = registrosMostrados.reduce((acc: any, reg: any) => { const nombre = reg.equipo?.nombre_team || 'Sin Team'; if (!acc[nombre]) acc[nombre] = 0; acc[nombre] += 1; return acc; }, {});
-  const datosBarras = Object.keys(conteoPorTeam).map(key => ({ nombre: key, operaciones: conteoPorTeam[key] })).sort((a, b) => b.operaciones - a.operaciones);
+  const guardarNuevoTeamBd = async () => {
+    if (!nuevoNombreTeam) return alert("Ingrese el nombre del equipo.");
+    const { data, error } = await supabase.from("equipos").insert([{ nombre_team: nuevoNombreTeam }]).select(`id, nombre_team, lider:trabajadoress!equipos_lider_id_fkey (id, nombres_apellidos, dni), equipo_tecnicos (tecnico:trabajadoress!equipo_tecnicos_tecnico_id_fkey (id, nombres_apellidos, dni))`);
+    if (!error && data) {
+      const nuevoEq = { ...data[0], equipo_tecnicos: data[0].equipo_tecnicos || [] };
+      setEquipos([...equipos, nuevoEq]); setEquipoSeleccionado(nuevoEq.id); setCreandoTeam(false); setNuevoNombreTeam("");
+    } else {
+      alert("Error en el registro. Verifique si el equipo ya existe.");
+    }
+  };
 
-  if (cargandoAuth || !usuarioActivo) return <div className="min-h-screen flex items-center justify-center bg-slate-100 font-sans">Validando accesos...</div>;
+  const manejarArchivo = (clave: string, archivo: File | undefined) => {
+    if (archivo) { setArchivos({ ...archivos, [clave]: archivo }); } 
+    else { const nuevosArchivos = { ...archivos }; delete nuevosArchivos[clave]; setArchivos(nuevosArchivos); }
+  };
+
+  const guardarRegistrosDelDia = async () => {
+    if (!fecha || !proyectoSeleccionado || !equipoSeleccionado) return alert("Complete los campos obligatorios: Fecha, Operador y Team.");
+    if (!equipoNoLaboro && !liderDelDia) return alert("Debe asignar un Team Leader para este registro.");
+    if (!equipoNoLaboro && !archivos.fotoEpp) return alert("La evidencia fotográfica (EPP) es de carácter obligatorio.");
+
+    setGuardando(true);
+    try {
+      let urlsSubidas: any = {};
+      if (!equipoNoLaboro) {
+        for (const clave in archivos) {
+          const archivo = archivos[clave];
+          const nombreUnico = `${Date.now()}_${archivo.name.replace(/\s/g, '_')}`;
+          const { data, error: errorSubida } = await supabase.storage.from("registros_simecar").upload(`diarios/${nombreUnico}`, archivo);
+          if (errorSubida) throw errorSubida;
+          const { data: linkPublico } = supabase.storage.from("registros_simecar").getPublicUrl(data.path);
+          urlsSubidas[clave] = linkPublico.publicUrl;
+        }
+      }
+
+      const { data: registroInsertado, error: errorBD } = await supabase.from("registros_diarios").insert([{
+        fecha: fecha, equipo_id: equipoSeleccionado, proyecto: proyectoSeleccionado, observaciones: equipoNoLaboro ? "EQUIPO NO LABORÓ EL DÍA DE HOY" : null,
+        registro_1_url: urlsSubidas.registro1 || null, registro_2_url: urlsSubidas.registro2 || null, registro_3_url: urlsSubidas.registro3 || null, registro_4_url: urlsSubidas.registro4 || null, foto_epp_url: urlsSubidas.fotoEpp || null,
+        ats_unificado_url: naAtsUnificado ? "N/A" : (urlsSubidas.atsUnificado || null),
+        permiso_electrico_url: naPermisoElectrico ? "N/A" : (urlsSubidas.permisoElectrico || null),
+        permiso_alturas_url: naPermisoAlturas ? "N/A" : (urlsSubidas.permisoAlturas || null),
+        ats_entel_url: naAtsEntel ? "N/A" : (urlsSubidas.atsEntel || null),
+        registrado_por: usuarioActivo.correo
+      }]).select().single();
+
+      if (errorBD) throw errorBD;
+      const registroId = registroInsertado.id;
+
+      let arrayAsistencia = [];
+      if (liderDelDia) arrayAsistencia.push({ registro_diario_id: registroId, trabajador_id: liderDelDia, asistio: equipoNoLaboro ? false : (liderAsistencia === "laboro") });
+      tecnicosDelDia.forEach(t => { if (t.id) arrayAsistencia.push({ registro_diario_id: registroId, trabajador_id: t.id, asistio: equipoNoLaboro ? false : (t.asistencia === "laboro") }); });
+
+      const { error: errorAsistencia } = await supabase.from("asistencia_diaria").insert(arrayAsistencia);
+      if (errorAsistencia) throw errorAsistencia;
+
+      alert("Registro almacenado exitosamente en el servidor.");
+      
+      setArchivos({}); setFecha(""); setProyectoSeleccionado(""); setEquipoSeleccionado("");
+      setEquipoNoLaboro(false); setNaAtsUnificado(false); setNaPermisoElectrico(false); 
+      setNaPermisoAlturas(false); setNaAtsEntel(false); setLiderDelDia("");
+      
+    } catch (error) {
+      console.error("Error:", error);
+      alert("Falla de conexión al servidor. Contacte al administrador.");
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  const detallesEquipo = equipos.find((eq) => eq.id === equipoSeleccionado);
+
+  const docsObligatorios = [
+    { key: "registro1", title: "Charla de 5 minutos" },
+    { key: "registro2", title: "Check list de EPP" },
+    { key: "registro3", title: "Check list de herramientas" },
+    { key: "registro4", title: "Check list pre uso sistema contra caídas" }
+  ];
+
+  if (cargandoAuth) return <div className="min-h-screen flex items-center justify-center bg-slate-100 font-sans">Validando credenciales...</div>;
+
+  if (!usuarioActivo) {
+    return (
+      <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans text-slate-800">
+        <div className="bg-white max-w-md w-full p-8 rounded border border-slate-200 shadow-sm">
+          <div className="text-center mb-8"><h1 className="text-3xl font-bold tracking-tight text-slate-900">Simecar</h1><p className="text-sm text-slate-500 mt-2">Portal de Gestión Operativa</p></div>
+          <form onSubmit={iniciarSesion} className="space-y-6">
+            <div><label className="block text-sm font-medium text-slate-700 mb-1">Correo Electrónico</label><input type="email" required className="w-full p-3 border border-slate-300 rounded text-sm focus:outline-none focus:border-blue-600" value={correo} onChange={(e) => setCorreo(e.target.value)} /></div>
+            <div><label className="block text-sm font-medium text-slate-700 mb-1">Contraseña</label><input type="password" required className="w-full p-3 border border-slate-300 rounded text-sm focus:outline-none focus:border-blue-600" value={password} onChange={(e) => setPassword(e.target.value)} /></div>
+            {errorLogin && <p className="text-red-600 text-sm font-medium">{errorLogin}</p>}
+            <button type="submit" className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-3 rounded transition-colors">Iniciar Sesión</button>
+          </form>
+        </div>
+      </main>
+    );
+  }
 
   return (
-    <main className="min-h-screen bg-slate-50 p-8 font-sans text-slate-800 relative">
-      <div className="max-w-7xl mx-auto">
-        
-        <div className="bg-white p-4 rounded shadow-sm border border-slate-200 mb-6 flex justify-between items-center">
-          <div><h1 className="text-2xl font-bold text-slate-900">Historial Analítico</h1></div>
+    <main className="min-h-screen bg-slate-50 p-8 font-sans text-slate-800">
+      <div className="max-w-6xl mx-auto">
+        <div className="bg-white p-4 rounded shadow-sm border border-slate-200 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
+          <div><h1 className="text-2xl font-bold text-slate-900 tracking-tight">Registro de Documentación</h1><p className="text-sm text-slate-500">Módulo de Captura de Datos</p></div>
           <div className="flex items-center gap-4">
-            <div className="text-right"><p className="text-xs text-slate-500 uppercase">Usuario Conectado</p><p className="text-sm font-medium">{usuarioActivo.correo} <span className="text-blue-600 font-bold ml-1">({usuarioActivo.rol})</span></p></div>
-            <a href="/" className="bg-slate-200 hover:bg-slate-300 px-4 py-2 rounded text-sm font-medium">Volver al Panel</a>
+            <div className="text-right"><p className="text-xs text-slate-500 uppercase tracking-wider">Usuario Conectado</p><p className="text-sm font-medium text-slate-900">{usuarioActivo.correo} <span className="text-blue-600 font-bold ml-1">({usuarioActivo.rol})</span></p></div>
+            <a href="/historial" className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2 px-4 rounded transition-colors">Módulo de Reportes</a>
+            <button onClick={cerrarSesion} className="bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-medium py-2 px-4 rounded transition-colors">Cerrar Sesión</button>
           </div>
         </div>
 
-        {!cargando && totalRegistros > 0 && (
-          <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="flex flex-col gap-4">
-              <div className="bg-white p-5 rounded border shadow-sm flex justify-between items-center border-l-4 border-l-blue-600">
-                <div><p className="text-xs font-bold text-slate-500 uppercase">Total Registros</p><p className="text-3xl font-black mt-1">{totalRegistros}</p></div><div className="text-blue-500 text-3xl">📋</div>
-              </div>
-              <div className="bg-white p-5 rounded border shadow-sm flex justify-between items-center border-l-4 border-l-green-500">
-                <div><p className="text-xs font-bold text-slate-500 uppercase">Días Operativos</p><p className="text-3xl font-black mt-1">{operativos}</p></div><div className="text-green-500 text-3xl">✅</div>
-              </div>
-              <div className="bg-white p-5 rounded border shadow-sm flex justify-between items-center border-l-4 border-l-red-500">
-                <div><p className="text-xs font-bold text-slate-500 uppercase">Inasistencias</p><p className="text-3xl font-black mt-1">{inasistencias}</p></div><div className="text-red-500 text-3xl">❌</div>
-              </div>
+        <div className="bg-white p-6 rounded shadow-sm border border-slate-200">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 p-5 bg-slate-50 rounded border border-slate-200">
+            <div><label className="block text-xs font-bold text-slate-700 uppercase mb-2">Fecha Operativa</label><input type="date" className="w-full p-2.5 border border-slate-300 rounded text-sm focus:outline-none focus:border-blue-500" value={fecha} onChange={(e) => setFecha(e.target.value)} /></div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-2">Operador / Cliente</label>
+              <select className="w-full p-2.5 border border-slate-300 rounded text-sm focus:outline-none focus:border-blue-500" value={proyectoSeleccionado} onChange={(e) => setProyectoSeleccionado(e.target.value)}>
+                <option value="">Seleccionar Operador</option><option value="Claro">Claro</option><option value="Integratel">Integratel</option><option value="Bitel">Bitel</option><option value="Entel">Entel</option>
+              </select>
             </div>
-            <div className="bg-white p-5 rounded border shadow-sm flex flex-col items-center justify-center">
-              <h3 className="text-sm font-bold text-slate-600 uppercase mb-2">Tasa de Operatividad</h3>
-              <div className="w-full h-48">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart><Pie data={datosPastel} cx="50%" cy="50%" innerRadius={50} outerRadius={80} dataKey="value" paddingAngle={5}>{datosPastel.map((entry, i) => <Cell key={i} fill={entry.color} />)}</Pie><Tooltip /></PieChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-            <div className="bg-white p-5 rounded border shadow-sm flex flex-col items-center justify-center">
-              <h3 className="text-sm font-bold text-slate-600 uppercase mb-2">Registros por Team</h3>
-              <div className="w-full h-48">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={datosBarras}><XAxis dataKey="nombre" tick={{fontSize: 10}} interval={0} angle={-45} textAnchor="end" height={50} /><Tooltip cursor={{fill: '#f1f5f9'}} /><Bar dataKey="operaciones" fill="#2563eb" radius={[4, 4, 0, 0]} /></BarChart>
-                </ResponsiveContainer>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-2">Cuadrilla / Team</label>
+              <div className="flex gap-2">
+                {!creandoTeam ? (
+                  <><select className="w-full p-2.5 border border-slate-300 rounded text-sm focus:outline-none focus:border-blue-500" value={equipoSeleccionado} onChange={(e) => setEquipoSeleccionado(e.target.value)}>
+                      <option value="">Seleccionar Team</option>
+                      {[...equipos].sort((a,b) => a.nombre_team.localeCompare(b.nombre_team, undefined, {numeric: true})).map((equipo) => (<option key={equipo.id} value={equipo.id}>{equipo.nombre_team}</option>))}
+                    </select>
+                    <button onClick={() => setCreandoTeam(true)} className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-3 py-2 rounded text-sm whitespace-nowrap">Nuevo</button>
+                  </>
+                ) : (
+                  <><input type="text" className="w-full p-2.5 border border-slate-300 rounded text-sm" placeholder="Ej. Team 31" value={nuevoNombreTeam} onChange={(e) => setNuevoNombreTeam(e.target.value)} />
+                    <button onClick={guardarNuevoTeamBd} className="bg-slate-800 hover:bg-slate-900 text-white font-medium px-3 py-2 rounded text-sm">Guardar</button>
+                    <button onClick={() => setCreandoTeam(false)} className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium px-3 py-2 rounded text-sm">X</button>
+                  </>
+                )}
               </div>
             </div>
           </div>
-        )}
 
-        <div className="bg-white p-5 rounded shadow-sm border mb-6 flex justify-between items-center">
-          <div className="flex items-center gap-3"><label className="text-sm font-semibold">Filtrar Cuadrilla:</label>
-            <select className="p-2 border rounded text-sm focus:outline-none" value={filtroEquipo} onChange={(e) => setFiltroEquipo(e.target.value)}>
-              <option value="">Todos los Registros</option>{[...equipos].sort((a,b) => a.nombre_team.localeCompare(b.nombre_team, undefined, {numeric: true})).map(eq => <option key={eq.id} value={eq.id}>{eq.nombre_team}</option>)}
-            </select>
-          </div>
-          <div className="flex gap-3">
-            <button onClick={() => exportarExcel("por_equipo")} className="bg-green-600 text-white px-4 py-2 rounded shadow-sm text-sm font-medium">Excel (Selección)</button>
-            <button onClick={() => exportarExcel("general")} className="bg-slate-800 text-white px-4 py-2 rounded shadow-sm text-sm font-medium">Excel (General)</button>
-          </div>
-        </div>
+          {!detallesEquipo && <div className="text-center py-12 text-slate-500 border border-dashed border-slate-300 rounded bg-slate-50 text-sm">Seleccione Fecha, Operador y Cuadrilla para habilitar los campos de registro.</div>}
 
-        {cargando ? ( <div className="bg-white p-10 rounded text-center text-slate-500">Cargando base de datos...</div> ) : (
-          <div className="bg-white rounded shadow-sm border overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-left text-sm whitespace-nowrap">
-                <thead className="bg-slate-100 border-b text-slate-700">
-                  <tr>
-                    <th className="p-4 font-semibold">Fecha</th>
-                    <th className="p-4 font-semibold">Cuadrilla</th>
-                    <th className="p-4 font-semibold">Operador</th>
-                    <th className="p-4 font-semibold">Estatus</th>
-                    <th className="p-4 font-semibold">Docs Obligatorios</th>
-                    <th className="p-4 font-semibold">Específicos</th>
-                    {usuarioActivo?.rol === 'Admin' && <th className="p-4 font-semibold text-center">Gestión</th>}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {registrosMostrados.length === 0 ? ( <tr><td colSpan={7} className="p-8 text-center text-slate-500">No hay registros en el sistema.</td></tr> ) : (
-                    registrosMostrados.map((reg) => (
-                      <tr key={reg.id} className="hover:bg-slate-50">
-                        <td className="p-4 font-medium">{reg.fecha}</td><td className="p-4">{reg.equipo?.nombre_team}</td><td className="p-4"><span className="bg-slate-200 px-2 py-1 rounded text-xs font-semibold">{reg.proyecto}</span></td>
-                        <td className="p-4">{reg.observaciones === 'EQUIPO NO LABORÓ EL DÍA DE HOY' ? <span className="text-red-600 font-semibold bg-red-50 px-2 py-1 rounded text-xs">INASISTENCIA</span> : <span className="text-green-600 font-semibold bg-green-50 px-2 py-1 rounded text-xs">OPERATIVO</span>}</td>
-                        <td className="p-4 flex gap-2">
-                          {/* Abreviaturas en los botones para que la tabla no se deforme */}
-                          {[
-                            { url: reg.registro_1_url, label: "CH-5M", title: "Charla de 5 minutos" },
-                            { url: reg.registro_2_url, label: "CK-EPP", title: "Check list de EPP" },
-                            { url: reg.registro_3_url, label: "CK-HER", title: "Check list de herramientas" },
-                            { url: reg.registro_4_url, label: "CK-CAI", title: "Check list contra caídas" },
-                            { url: reg.foto_epp_url, label: "F-EPP", title: "Foto EPPs" }
-                          ].map((doc, i) => (
-                            doc.url ? <a key={i} href={doc.url} target="_blank" className="text-xs bg-slate-100 border px-2 py-1.5 rounded font-medium text-slate-700 hover:bg-slate-200" title={doc.title}>{doc.label}</a> : <span key={i} className="text-xs bg-red-50 border border-red-100 px-2 py-1.5 rounded text-red-400 line-through" title={`Falta: ${doc.title}`}>{doc.label}</span>
-                          ))}
-                        </td>
-                        <td className="p-4">
-                          <div className="flex gap-2">
-                            {['Claro', 'Integratel', 'Bitel'].includes(reg.proyecto) && (
-                              reg.ats_unificado_url === 'N/A' ? <span className="text-xs bg-slate-100 text-slate-500 px-2 py-1.5 rounded border">ATS: N/A</span> : reg.ats_unificado_url ? <a href={reg.ats_unificado_url} target="_blank" className="text-xs bg-blue-50 border border-blue-200 text-blue-700 px-2 py-1.5 rounded font-medium">ATS Unif.</a> : <span className="text-xs bg-red-50 border border-red-100 text-red-600 px-2 py-1.5 rounded">Falta ATS</span>
-                            )}
-                            {reg.proyecto === 'Entel' && (
-                              <>
-                                {reg.permiso_electrico_url === 'N/A' ? <span className="text-xs bg-slate-100 text-slate-500 px-2 py-1.5 rounded border">Eléc: N/A</span> : reg.permiso_electrico_url ? <a href={reg.permiso_electrico_url} target="_blank" className="text-xs bg-purple-50 border border-purple-200 text-purple-700 px-2 py-1.5 rounded font-medium">P. Eléctrico</a> : <span className="text-xs bg-red-50 border border-red-100 text-red-600 px-2 py-1.5 rounded">Falta PE</span>}
-                                {reg.permiso_alturas_url === 'N/A' ? <span className="text-xs bg-slate-100 text-slate-500 px-2 py-1.5 rounded border">Alt: N/A</span> : reg.permiso_alturas_url ? <a href={reg.permiso_alturas_url} target="_blank" className="text-xs bg-purple-50 border border-purple-200 text-purple-700 px-2 py-1.5 rounded font-medium">P. Alturas</a> : <span className="text-xs bg-red-50 border border-red-100 text-red-600 px-2 py-1.5 rounded">Falta PA</span>}
-                                {reg.ats_entel_url === 'N/A' ? <span className="text-xs bg-slate-100 text-slate-500 px-2 py-1.5 rounded border">ATS: N/A</span> : reg.ats_entel_url ? <a href={reg.ats_entel_url} target="_blank" className="text-xs bg-blue-50 border border-blue-200 text-blue-700 px-2 py-1.5 rounded font-medium">ATS Entel</a> : <span className="text-xs bg-red-50 border border-red-100 text-red-600 px-2 py-1.5 rounded">Falta ATS</span>}
-                              </>
-                            )}
-                          </div>
-                        </td>
-                        {usuarioActivo?.rol === 'Admin' && (
-                          <td className="p-4 text-center">
-                            <div className="flex gap-2 justify-center">
-                              <button onClick={() => abrirModalEdicion(reg)} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold py-1.5 px-3 rounded border border-blue-200">Editar</button>
-                              <button onClick={() => eliminarRegistro(reg.id)} className="text-xs bg-red-50 hover:bg-red-100 text-red-700 font-semibold py-1.5 px-3 rounded border border-red-200">Eliminar</button>
-                            </div>
-                          </td>
-                        )}
-                      </tr>
-                    ))
+          {detallesEquipo && (
+            <div className="space-y-8">
+              <div>
+                <div className="flex justify-between items-center border-b border-slate-200 pb-3 mb-5">
+                  <h2 className="text-lg font-semibold text-slate-800">Personal Operativo: {detallesEquipo.nombre_team}</h2>
+                  <label className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 px-3 py-1.5 rounded cursor-pointer font-medium text-sm hover:bg-red-100">
+                    <input type="checkbox" className="w-4 h-4 accent-red-600" checked={equipoNoLaboro} onChange={(e) => setEquipoNoLaboro(e.target.checked)} /> Registrar Inasistencia General
+                  </label>
+                </div>
+                
+                <div className={`p-4 rounded border mb-4 flex flex-col md:flex-row justify-between items-center gap-4 ${equipoNoLaboro ? 'bg-slate-100 opacity-60' : 'bg-white shadow-sm'}`}>
+                  <div className="flex items-center w-full md:w-2/3">
+                    <span className={`text-white text-xs font-bold px-2 py-1 rounded uppercase mr-3 ${equipoNoLaboro ? 'bg-slate-400' : 'bg-slate-800'}`}>Leader</span>
+                    <select className="w-full p-2.5 border border-slate-300 rounded text-sm font-medium" value={liderDelDia} onChange={(e) => setLiderDelDia(e.target.value)} disabled={equipoNoLaboro}>
+                      <option value="">-- Asignar Responsable --</option>{todosLosLideres.map(l => <option key={l.id} value={l.id}>{l.nombres_apellidos}</option>)}
+                    </select>
+                  </div>
+                  <select className="p-2.5 border border-slate-300 rounded text-sm" value={equipoNoLaboro ? "no_laboro" : liderAsistencia} onChange={(e) => setLiderAsistencia(e.target.value)} disabled={equipoNoLaboro}>
+                    <option value="laboro">Asistió</option><option value="no_laboro">Inasistencia</option>
+                  </select>
+                </div>
+
+                <div className={`p-5 rounded border ${equipoNoLaboro ? 'bg-slate-100 opacity-60' : 'bg-slate-50'}`}>
+                  <div className="flex justify-between items-center mb-4"><h3 className="font-semibold text-slate-700 text-sm uppercase">Técnicos Asignados</h3>
+                    {!equipoNoLaboro && (
+                      <div className="flex gap-2"><button onClick={agregarTecnico} className="text-xs bg-white border border-slate-300 py-1.5 px-3 rounded shadow-sm">Añadir Técnico</button><button onClick={() => setCreandoNuevo(!creandoNuevo)} className="text-xs bg-slate-800 text-white py-1.5 px-3 rounded shadow-sm">Nuevo Personal</button></div>
+                    )}
+                  </div>
+                  {creandoNuevo && !equipoNoLaboro && (
+                    <div className="mb-5 p-4 bg-white border rounded flex flex-col md:flex-row gap-3 items-end shadow-sm">
+                      <div className="w-full md:w-1/2"><label className="block text-xs font-medium text-slate-600 mb-1">Nombre</label><input type="text" className="w-full p-2 border rounded text-sm" value={nuevoNombre} onChange={(e) => setNuevoNombre(e.target.value)} /></div>
+                      <div className="w-full md:w-1/3"><label className="block text-xs font-medium text-slate-600 mb-1">DNI</label><input type="text" className="w-full p-2 border rounded text-sm" value={nuevoDni} onChange={(e) => setNuevoDni(e.target.value)} /></div>
+                      <button onClick={guardarNuevoTecnicoBd} className="bg-blue-600 text-white px-4 py-2 rounded text-sm">Guardar</button>
+                    </div>
                   )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </div>
+                  <div className="space-y-3">
+                    {tecnicosDelDia.map((tecnico, index) => (
+                      <div key={index} className="flex flex-col md:flex-row justify-between items-center p-3 bg-white border rounded shadow-sm gap-3">
+                        <select className="w-full md:w-2/3 p-2 border rounded text-sm" value={tecnico.id} onChange={(e) => cambiarTecnico(index, "id", e.target.value)} disabled={equipoNoLaboro}>
+                          <option value="">-- Seleccionar Técnico --</option>{todosLosTecnicos.map((t) => <option key={t.id} value={t.id}>{t.nombres_apellidos}</option>)}
+                        </select>
+                        <div className="flex gap-2 items-center">
+                          <select className="p-2 border rounded text-sm" value={equipoNoLaboro ? "no_laboro" : tecnico.asistencia} onChange={(e) => cambiarTecnico(index, "asistencia", e.target.value)} disabled={equipoNoLaboro}>
+                            <option value="laboro">Asistió</option><option value="no_laboro">Inasistencia</option>
+                          </select>
+                          {!equipoNoLaboro && <button onClick={() => eliminarTecnico(index)} className="p-2 text-red-400 hover:text-red-600">✕</button>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
 
-      {registroEditando && (
-        <div className="fixed inset-0 bg-slate-900 bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white p-6 rounded-lg shadow-lg max-w-md w-full">
-            <h2 className="text-xl font-bold mb-4">Editar Registro</h2>
-            <div className="mb-4"><label className="block text-sm font-medium mb-1">Fecha Operativa</label><input type="date" className="w-full p-2 border rounded text-sm" value={editFecha} onChange={(e) => setEditFecha(e.target.value)} /></div>
-            <div className="mb-6"><label className="block text-sm font-medium mb-1">Operador</label><select className="w-full p-2 border rounded text-sm" value={editOperador} onChange={(e) => setEditOperador(e.target.value)}><option value="Claro">Claro</option><option value="Integratel">Integratel</option><option value="Bitel">Bitel</option><option value="Entel">Entel</option></select></div>
-            <div className="flex justify-end gap-3"><button onClick={() => setRegistroEditando(null)} className="bg-slate-200 px-4 py-2 rounded text-sm font-medium">Cancelar</button><button onClick={guardarEdicion} disabled={guardandoEdicion} className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium disabled:bg-slate-400">{guardandoEdicion ? "Guardando..." : "Guardar"}</button></div>
-          </div>
+              {!equipoNoLaboro ? (
+                <div className="mt-8">
+                  <h2 className="text-lg font-semibold text-slate-800 border-b border-slate-200 pb-3 mb-5">Repositorio Documental</h2>
+                  
+                  <h3 className="font-semibold text-slate-700 mb-4 text-sm uppercase tracking-wide">Documentos Obligatorios</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
+                    {docsObligatorios.map((doc) => (
+                      <div key={doc.key} className="bg-white p-4 rounded border border-slate-300 shadow-sm">
+                        <label className="block text-sm font-medium text-slate-700 mb-2">{doc.title}</label>
+                        <input type="file" className="text-sm w-full text-slate-600 file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-slate-100" onChange={(e) => manejarArchivo(doc.key, e.target.files?.[0])} />
+                      </div>
+                    ))}
+                    <div className="bg-white p-4 rounded border border-blue-200 shadow-sm md:col-span-2 border-l-4 border-l-blue-600">
+                      <label className="block text-sm font-medium text-slate-900 mb-2">Foto con EPPs (Equipo)</label>
+                      <input type="file" accept="image/*" className="text-sm w-full text-slate-600 file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-blue-50 text-blue-700" onChange={(e) => manejarArchivo("fotoEpp", e.target.files?.[0])} />
+                    </div>
+                  </div>
+
+                  {(proyectoSeleccionado === "Claro" || proyectoSeleccionado === "Integratel" || proyectoSeleccionado === "Bitel") && (
+                    <div className="mt-6 p-5 bg-slate-50 border border-slate-200 rounded">
+                      <h3 className="font-semibold text-slate-700 mb-4 text-sm uppercase tracking-wide">Documentación Específica: {proyectoSeleccionado}</h3>
+                      <div className="bg-white p-4 rounded border border-slate-300 shadow-sm">
+                        <div className="flex justify-between items-center mb-2">
+                          <label className={`block text-sm font-medium ${naAtsUnificado ? 'text-slate-400 line-through' : 'text-slate-700'}`}>ATS Unificado</label>
+                          <label className="text-xs flex items-center gap-2 font-medium text-slate-600 cursor-pointer bg-slate-100 px-2 py-1 rounded">
+                            <input type="checkbox" className="w-3.5 h-3.5" checked={naAtsUnificado} onChange={(e) => setNaAtsUnificado(e.target.checked)} /> N/A
+                          </label>
+                        </div>
+                        {!naAtsUnificado && <input type="file" className="text-sm w-full text-slate-600 file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:font-medium file:bg-slate-100 mt-2" onChange={(e) => manejarArchivo("atsUnificado", e.target.files?.[0])}/>}
+                      </div>
+                    </div>
+                  )}
+
+                  {proyectoSeleccionado === "Entel" && (
+                    <div className="mt-6 p-5 bg-slate-50 border border-slate-200 rounded">
+                      <h3 className="font-semibold text-slate-700 mb-4 text-sm uppercase tracking-wide">Documentación Específica: Entel</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                        <div className="bg-white p-4 rounded border shadow-sm">
+                            <div className="flex justify-between items-center mb-2">
+                              <label className={`block text-sm font-medium ${naPermisoElectrico ? 'text-slate-400 line-through' : 'text-slate-700'}`}>Permiso de trabajo eléctrico</label>
+                              <label className="text-xs flex items-center gap-1 font-medium cursor-pointer"><input type="checkbox" checked={naPermisoElectrico} onChange={(e) => setNaPermisoElectrico(e.target.checked)} /> N/A</label>
+                            </div>
+                            {!naPermisoElectrico && <input type="file" className="text-sm w-full text-slate-600 file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-slate-100 mt-2" onChange={(e) => manejarArchivo("permisoElectrico", e.target.files?.[0])}/>}
+                        </div>
+                        <div className="bg-white p-4 rounded border shadow-sm">
+                            <div className="flex justify-between items-center mb-2">
+                              <label className={`block text-sm font-medium ${naPermisoAlturas ? 'text-slate-400 line-through' : 'text-slate-700'}`}>Permiso de trabajo de altura</label>
+                              <label className="text-xs flex items-center gap-1 font-medium cursor-pointer"><input type="checkbox" checked={naPermisoAlturas} onChange={(e) => setNaPermisoAlturas(e.target.checked)} /> N/A</label>
+                            </div>
+                            {!naPermisoAlturas && <input type="file" className="text-sm w-full text-slate-600 file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-slate-100 mt-2" onChange={(e) => manejarArchivo("permisoAlturas", e.target.files?.[0])}/>}
+                        </div>
+                        <div className="bg-white p-4 rounded border shadow-sm">
+                            <div className="flex justify-between items-center mb-2">
+                              <label className={`block text-sm font-medium ${naAtsEntel ? 'text-slate-400 line-through' : 'text-slate-700'}`}>ATS Entel</label>
+                              <label className="text-xs flex items-center gap-1 font-medium cursor-pointer"><input type="checkbox" checked={naAtsEntel} onChange={(e) => setNaAtsEntel(e.target.checked)} /> N/A</label>
+                            </div>
+                            {!naAtsEntel && <input type="file" className="text-sm w-full text-slate-600 file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-slate-100 mt-2" onChange={(e) => manejarArchivo("atsEntel", e.target.files?.[0])}/>}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="bg-white border-l-4 border-red-600 p-6 rounded shadow-sm mt-8"><h3 className="text-lg font-semibold text-slate-800">Inasistencia Registrada</h3><p className="text-slate-600 mt-1 text-sm">Al guardar la información, el sistema registrará la inasistencia total de la cuadrilla y eximirá la carga documental.</p></div>
+              )}
+
+              <div className="mt-8 flex justify-end border-t border-slate-200 pt-6">
+                <button onClick={guardarRegistrosDelDia} disabled={guardando} className={`font-medium py-3 px-8 rounded shadow-sm ${guardando ? "bg-slate-300 cursor-not-allowed text-slate-500" : "bg-blue-600 hover:bg-blue-700 text-white"}`}>
+                  {guardando ? "Procesando Registro..." : "Procesar y Guardar Registro"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </main>
   );
 }
