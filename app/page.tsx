@@ -63,14 +63,25 @@ export default function Dashboard() {
     setCorreo(""); setPassword("");
   };
 
+  // 👇 AQUÍ ESTÁ EL CAMBIO CLAVE 👇
   const cargarDatos = async () => {
+    // 1. Traemos los equipos igual que antes
     const { data: dataEquipos } = await supabase.from("equipos").select(`id, nombre_team, lider:trabajadoress!equipos_lider_id_fkey (id, nombres_apellidos, dni), equipo_tecnicos (tecnico:trabajadoress!equipo_tecnicos_tecnico_id_fkey (id, nombres_apellidos, dni))`);
     if (dataEquipos) setEquipos(dataEquipos);
-    const { data: dataTecnicos } = await supabase.from("trabajadoress").select("id, nombres_apellidos, dni").eq("cargo", "Tecnico");
-    if (dataTecnicos) setTodosLosTecnicos(dataTecnicos);
-    const { data: dataLideres } = await supabase.from("trabajadoress").select("id, nombres_apellidos, dni").eq("cargo", "Team Leader");
-    if (dataLideres) setTodosLosLideres(dataLideres);
+    
+    // 2. Traemos a TODOS los trabajadores sin importar el cargo, y los ordenamos alfabéticamente
+    const { data: dataTodosLosTrabajadores } = await supabase
+      .from("trabajadoress")
+      .select("id, nombres_apellidos, dni")
+      .order("nombres_apellidos", { ascending: true }); // Orden de la A a la Z
+    
+    if (dataTodosLosTrabajadores) {
+      // 3. Le pasamos exactamente la misma lista completa y ordenada a ambos selectores
+      setTodosLosTecnicos(dataTodosLosTrabajadores);
+      setTodosLosLideres(dataTodosLosTrabajadores);
+    }
   };
+  // 👆 FIN DEL CAMBIO 👆
 
   useEffect(() => { if (usuarioActivo) cargarDatos(); }, [usuarioActivo]);
 
@@ -95,6 +106,8 @@ export default function Dashboard() {
     const { data, error } = await supabase.from("trabajadoress").insert([{ nombres_apellidos: nuevoNombre, dni: nuevoDni, cargo: "Tecnico" }]).select();
     if (!error && data) {
       setTodosLosTecnicos([...todosLosTecnicos, data[0]]);
+      // Agregamos esto para que el nuevo también aparezca en la lista de líderes si es necesario
+      setTodosLosLideres([...todosLosLideres, data[0]]);
       setTecnicosDelDia([...tecnicosDelDia, { id: data[0].id, asistencia: "laboro" }]);
       setNuevoNombre(""); setNuevoDni(""); setCreandoNuevo(false);
     }
@@ -241,7 +254,6 @@ export default function Dashboard() {
 
           {detallesEquipo && (
             <div className="space-y-8">
-              {/* Asistencia Oculta por brevedad, es idéntica */}
               <div>
                 <div className="flex justify-between items-center border-b border-slate-200 pb-3 mb-5">
                   <h2 className="text-lg font-semibold text-slate-800">Personal Operativo: {detallesEquipo.nombre_team}</h2>
@@ -299,7 +311,6 @@ export default function Dashboard() {
                   
                   <h3 className="font-semibold text-slate-700 mb-4 text-sm uppercase tracking-wide">Documentos Obligatorios</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
-                    {/* AQUI ESTÁN LOS NOMBRES OFICIALES NUEVOS */}
                     {docsObligatorios.map((doc) => (
                       <div key={doc.key} className="bg-white p-4 rounded border border-slate-300 shadow-sm">
                         <label className="block text-sm font-medium text-slate-700 mb-2">{doc.title}</label>
