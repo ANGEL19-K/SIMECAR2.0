@@ -49,6 +49,7 @@ export default function Historial() {
 
   const [registroEditando, setRegistroEditando] = useState<any>(null);
   const [editFecha, setEditFecha] = useState("");
+  const [editHora, setEditHora] = useState("");
   const [editOperador, setEditOperador] = useState("");
   const [guardandoEdicion, setGuardandoEdicion] = useState(false);
   
@@ -73,29 +74,139 @@ export default function Historial() {
   const cargarHistorial = async () => {
     setCargando(true);
 
-    const { data: dataRegistros, error: errorRegistros } = await supabase
-      .from("registros_diarios")
-      .select(`*, equipo:equipos (nombre_team)`)
-      .order("fecha", { ascending: false });
+    try {
+      const { data: dataEquipos, error: errorEquipos } = await supabase
+        .from("equipos")
+        .select("id, nombre_team, lider_id");
 
-    if (errorRegistros) {
-      console.error(errorRegistros);
-      alert("No se pudo cargar el historial.");
-    } else if (dataRegistros) {
-      setRegistros(dataRegistros);
+      if (errorEquipos) {
+        throw errorEquipos;
+      }
+
+      const equiposCargados = dataEquipos || [];
+      setEquipos(equiposCargados);
+
+      const { data: dataRegistros, error: errorRegistros } = await supabase
+        .from("registros_diarios")
+        .select(`*, equipo:equipos (nombre_team)`)
+        .order("fecha", { ascending: false });
+
+      if (errorRegistros) {
+        throw errorRegistros;
+      }
+
+      const registrosBase = dataRegistros || [];
+
+      if (registrosBase.length === 0) {
+        setRegistros([]);
+        return;
+      }
+
+      const idsRegistros = registrosBase.map((reg: any) => reg.id);
+
+      let asistencias: any[] = [];
+
+      // Primero intentamos leer rol_registro. Si aún no existe la columna,
+      // el historial sigue funcionando y usa el líder actual del Team como respaldo.
+      const consultaAsistencias = await supabase
+        .from("asistencia_diaria")
+        .select("registro_diario_id, trabajador_id, asistio, rol_registro")
+        .in("registro_diario_id", idsRegistros);
+
+      if (consultaAsistencias.error) {
+        console.warn(
+          "No se pudo leer rol_registro. Se usará compatibilidad con registros antiguos:",
+          consultaAsistencias.error
+        );
+
+        const consultaAntigua = await supabase
+          .from("asistencia_diaria")
+          .select("registro_diario_id, trabajador_id, asistio")
+          .in("registro_diario_id", idsRegistros);
+
+        if (consultaAntigua.error) {
+          throw consultaAntigua.error;
+        }
+
+        asistencias = (consultaAntigua.data || []).map((a: any) => ({
+          ...a,
+          rol_registro: null,
+        }));
+      } else {
+        asistencias = consultaAsistencias.data || [];
+      }
+
+      const idsTrabajadores = [
+        ...new Set(
+          asistencias
+            .map((a: any) => a.trabajador_id)
+            .filter((id: any) => Boolean(id))
+        ),
+      ];
+
+      let nombresPorId: Record<string, string> = {};
+
+      if (idsTrabajadores.length > 0) {
+        const { data: trabajadores, error: errorTrabajadores } = await supabase
+          .from("trabajadoress")
+          .select("id, nombres_apellidos")
+          .in("id", idsTrabajadores);
+
+        if (errorTrabajadores) {
+          throw errorTrabajadores;
+        }
+
+        nombresPorId = Object.fromEntries(
+          (trabajadores || []).map((t: any) => [t.id, t.nombres_apellidos])
+        );
+      }
+
+      const equiposPorId = Object.fromEntries(
+        equiposCargados.map((eq: any) => [eq.id, eq])
+      );
+
+      const registrosConPersonal = registrosBase.map((reg: any) => {
+        const personal = asistencias.filter(
+          (a: any) => a.registro_diario_id === reg.id
+        );
+
+        const equipoActual = equiposPorId[reg.equipo_id];
+        const liderActualId = equipoActual?.lider_id || null;
+
+        const esLeader = (persona: any) => {
+          const rol = String(persona.rol_registro || "").toUpperCase();
+
+          if (rol === "LEADER") return true;
+          if (rol === "TECNICO") return false;
+
+          // Compatibilidad con registros creados antes de rol_registro.
+          return Boolean(liderActualId && persona.trabajador_id === liderActualId);
+        };
+
+        const leaders = personal
+          .filter(esLeader)
+          .map((p: any) => nombresPorId[p.trabajador_id])
+          .filter(Boolean);
+
+        const tecnicos = personal
+          .filter((p: any) => !esLeader(p))
+          .map((p: any) => nombresPorId[p.trabajador_id])
+          .filter(Boolean);
+
+        return {
+          ...reg,
+          team_leader: leaders.join(", "),
+          tecnicos_registrados: tecnicos.join(", "),
+        };
+      });
+
+      setRegistros(registrosConPersonal);
+    } catch (error) {
+      console.error(error);
+      alert("No se pudo cargar el historial y el personal registrado.");
+    } finally {
+      setCargando(false);
     }
-
-    const { data: dataEquipos, error: errorEquipos } = await supabase
-      .from("equipos")
-      .select("id, nombre_team");
-
-    if (errorEquipos) {
-      console.error(errorEquipos);
-    } else if (dataEquipos) {
-      setEquipos(dataEquipos);
-    }
-
-    setCargando(false);
   };
 
   useEffect(() => {
@@ -155,6 +266,7 @@ export default function Historial() {
   const abrirModalEdicion = (reg: any) => {
     setRegistroEditando(reg);
     setEditFecha(reg.fecha);
+    setEditHora(reg.hora_epp ? String(reg.hora_epp).slice(0, 5) : "");
     setEditOperador(reg.proyecto);
     setArchivosEdicion({});
     setDocumentosEliminados({});
@@ -230,6 +342,11 @@ export default function Historial() {
     }
   };
 
+  const formatearHora = (hora: any) => {
+    if (!hora) return "";
+    return String(hora).slice(0, 5);
+  };
+
   const guardarEdicion = async () => {
     if (!registroEditando) return;
 
@@ -246,6 +363,7 @@ export default function Historial() {
     try {
       const cambios: Record<string, any> = {
         fecha: editFecha,
+        hora_epp: editHora || null,
         proyecto: editOperador,
       };
 
@@ -510,8 +628,11 @@ export default function Historial() {
 
     const datosMapeados = datosAExportar.map((reg) => ({
       "Fecha Operativa": reg.fecha,
+      "Hora EPP": formatearHora(reg.hora_epp),
       Operador: reg.proyecto,
       Cuadrilla: reg.equipo?.nombre_team || "No Asignado",
+      "Team Leader": reg.team_leader || "Sin registro",
+      "Técnicos": reg.tecnicos_registrados || "Sin registro",
       Asistencia:
         reg.observaciones === "EQUIPO NO LABORÓ EL DÍA DE HOY"
           ? "INASISTENCIA"
@@ -800,6 +921,7 @@ export default function Historial() {
                 <thead className="bg-slate-100 border-b text-slate-700">
                   <tr>
                     <th className="p-4 font-semibold">Fecha</th>
+                    <th className="p-4 font-semibold">Hora EPP</th>
                     <th className="p-4 font-semibold">Cuadrilla</th>
                     <th className="p-4 font-semibold">Operador</th>
                     <th className="p-4 font-semibold">Estatus</th>
@@ -816,7 +938,7 @@ export default function Historial() {
                   {registrosMostrados.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={7}
+                        colSpan={8}
                         className="p-8 text-center text-slate-500"
                       >
                         No hay registros en el sistema.
@@ -826,6 +948,7 @@ export default function Historial() {
                     registrosMostrados.map((reg) => (
                       <tr key={reg.id} className="hover:bg-slate-50">
                         <td className="p-4 font-medium">{reg.fecha}</td>
+                        <td className="p-4">{formatearHora(reg.hora_epp) || "—"}</td>
                         <td className="p-4">
                           {reg.equipo?.nombre_team}
                         </td>
@@ -1030,7 +1153,7 @@ export default function Historial() {
             </div>
 
             <div className="p-6 overflow-y-auto">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <div>
                   <label className="block text-sm font-medium mb-1">
                     Fecha Operativa
@@ -1041,6 +1164,20 @@ export default function Historial() {
                     value={editFecha}
                     disabled={guardandoEdicion}
                     onChange={(e) => setEditFecha(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Hora EPP
+                  </label>
+                  <input
+                    type="time"
+                    step="60"
+                    className="w-full p-2 border rounded text-sm"
+                    value={editHora}
+                    disabled={guardandoEdicion}
+                    onChange={(e) => setEditHora(e.target.value)}
                   />
                 </div>
 
