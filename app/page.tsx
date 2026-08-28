@@ -20,6 +20,7 @@ export default function Dashboard() {
   const [tecnicosDelDia, setTecnicosDelDia] = useState<any[]>([]);
 
   const [fecha, setFecha] = useState("");
+  const [horaEpp, setHoraEpp] = useState("");
   const [archivos, setArchivos] = useState<any>({});
   const [guardando, setGuardando] = useState(false);
 
@@ -155,6 +156,7 @@ export default function Dashboard() {
         permiso_electrico_url: naPermisoElectrico ? "N/A" : (urlsSubidas.permisoElectrico || null),
         permiso_alturas_url: naPermisoAlturas ? "N/A" : (urlsSubidas.permisoAlturas || null),
         ats_entel_url: naAtsEntel ? "N/A" : (urlsSubidas.atsEntel || null),
+        hora_epp: equipoNoLaboro ? null : (horaEpp || null),
         registrado_por: usuarioActivo.correo
       }]).select().single();
 
@@ -162,15 +164,32 @@ export default function Dashboard() {
       const registroId = registroInsertado.id;
 
       let arrayAsistencia = [];
-      if (liderDelDia) arrayAsistencia.push({ registro_diario_id: registroId, trabajador_id: liderDelDia, asistio: equipoNoLaboro ? false : (liderAsistencia === "laboro") });
-      tecnicosDelDia.forEach(t => { if (t.id) arrayAsistencia.push({ registro_diario_id: registroId, trabajador_id: t.id, asistio: equipoNoLaboro ? false : (t.asistencia === "laboro") }); });
+      if (liderDelDia) {
+        arrayAsistencia.push({
+          registro_diario_id: registroId,
+          trabajador_id: liderDelDia,
+          asistio: equipoNoLaboro ? false : (liderAsistencia === "laboro"),
+          rol_registro: "LEADER"
+        });
+      }
+
+      tecnicosDelDia.forEach(t => {
+        if (t.id) {
+          arrayAsistencia.push({
+            registro_diario_id: registroId,
+            trabajador_id: t.id,
+            asistio: equipoNoLaboro ? false : (t.asistencia === "laboro"),
+            rol_registro: "TECNICO"
+          });
+        }
+      });
 
       const { error: errorAsistencia } = await supabase.from("asistencia_diaria").insert(arrayAsistencia);
       if (errorAsistencia) throw errorAsistencia;
 
       alert("Registro almacenado exitosamente en el servidor.");
       
-      setArchivos({}); setFecha(""); setProyectoSeleccionado(""); setEquipoSeleccionado("");
+      setArchivos({}); setFecha(""); setHoraEpp(""); setProyectoSeleccionado(""); setEquipoSeleccionado("");
       setEquipoNoLaboro(false); setNaAtsUnificado(false); setNaPermisoElectrico(false); 
       setNaPermisoAlturas(false); setNaAtsEntel(false); setLiderDelDia("");
       
@@ -303,6 +322,26 @@ export default function Dashboard() {
                     ))}
                   </div>
                 </div>
+
+                {!equipoNoLaboro && (
+                  <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded shadow-sm">
+                    <label className="block text-xs font-bold text-blue-900 uppercase mb-2">
+                      Hora de la evidencia EPP
+                    </label>
+                    <div className="flex flex-col md:flex-row md:items-center gap-3">
+                      <input
+                        type="time"
+                        step="60"
+                        className="w-full md:w-48 p-2.5 border border-blue-300 rounded text-sm bg-white focus:outline-none focus:border-blue-600"
+                        value={horaEpp}
+                        onChange={(e) => setHoraEpp(e.target.value)}
+                      />
+                      <p className="text-xs text-slate-600">
+                        Ingrese manualmente la hora que corresponde a la foto EPP. No se toma la hora de subida.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {!equipoNoLaboro ? (
