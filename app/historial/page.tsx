@@ -52,7 +52,7 @@ export default function Historial() {
   const [editHora, setEditHora] = useState("");
   const [editOperador, setEditOperador] = useState("");
   const [guardandoEdicion, setGuardandoEdicion] = useState(false);
-  
+
   const [archivosEdicion, setArchivosEdicion] = useState<
     Partial<Record<CampoDocumento, File>>
   >({});
@@ -102,38 +102,49 @@ export default function Historial() {
         return;
       }
 
+      const CHUNK_SIZE = 100;
       const idsRegistros = registrosBase.map((reg: any) => reg.id);
 
       let asistencias: any[] = [];
+      let usarCompatibilidad = false;
 
-      // Primero intentamos leer rol_registro. Si aún no existe la columna,
-      // el historial sigue funcionando y usa el líder actual del Team como respaldo.
-      const consultaAsistencias = await supabase
-        .from("asistencia_diaria")
-        .select("registro_diario_id, trabajador_id, asistio, rol_registro")
-        .in("registro_diario_id", idsRegistros);
+      // Consultamos en bloques de 100 IDs para no exceder el límite de URL de Supabase
+      for (let i = 0; i < idsRegistros.length; i += CHUNK_SIZE) {
+        const bloqueIds = idsRegistros.slice(i, i + CHUNK_SIZE);
 
-      if (consultaAsistencias.error) {
-        console.warn(
-          "No se pudo leer rol_registro. Se usará compatibilidad con registros antiguos:",
-          consultaAsistencias.error
-        );
+        if (!usarCompatibilidad) {
+          const consultaAsistencias = await supabase
+            .from("asistencia_diaria")
+            .select("registro_diario_id, trabajador_id, asistio, rol_registro")
+            .in("registro_diario_id", bloqueIds);
+
+          if (consultaAsistencias.error) {
+            console.warn(
+              "No se pudo leer rol_registro. Se usará compatibilidad con registros antiguos:",
+              consultaAsistencias.error
+            );
+            usarCompatibilidad = true;
+          } else {
+            asistencias.push(...(consultaAsistencias.data || []));
+            continue;
+          }
+        }
 
         const consultaAntigua = await supabase
           .from("asistencia_diaria")
           .select("registro_diario_id, trabajador_id, asistio")
-          .in("registro_diario_id", idsRegistros);
+          .in("registro_diario_id", bloqueIds);
 
         if (consultaAntigua.error) {
           throw consultaAntigua.error;
         }
 
-        asistencias = (consultaAntigua.data || []).map((a: any) => ({
-          ...a,
-          rol_registro: null,
-        }));
-      } else {
-        asistencias = consultaAsistencias.data || [];
+        asistencias.push(
+          ...(consultaAntigua.data || []).map((a: any) => ({
+            ...a,
+            rol_registro: null,
+          }))
+        );
       }
 
       const idsTrabajadores = [
@@ -147,17 +158,24 @@ export default function Historial() {
       let nombresPorId: Record<string, string> = {};
 
       if (idsTrabajadores.length > 0) {
-        const { data: trabajadores, error: errorTrabajadores } = await supabase
-          .from("trabajadoress")
-          .select("id, nombres_apellidos")
-          .in("id", idsTrabajadores);
+        const trabajadoresCargados: any[] = [];
 
-        if (errorTrabajadores) {
-          throw errorTrabajadores;
+        for (let i = 0; i < idsTrabajadores.length; i += CHUNK_SIZE) {
+          const bloqueTrabajadores = idsTrabajadores.slice(i, i + CHUNK_SIZE);
+          const { data: trabajadores, error: errorTrabajadores } = await supabase
+            .from("trabajadoress")
+            .select("id, nombres_apellidos")
+            .in("id", bloqueTrabajadores);
+
+          if (errorTrabajadores) {
+            throw errorTrabajadores;
+          }
+
+          trabajadoresCargados.push(...(trabajadores || []));
         }
 
         nombresPorId = Object.fromEntries(
-          (trabajadores || []).map((t: any) => [t.id, t.nombres_apellidos])
+          trabajadoresCargados.map((t: any) => [t.id, t.nombres_apellidos])
         );
       }
 
@@ -221,11 +239,9 @@ export default function Historial() {
     if (!confirmacion) return;
 
     try {
-
-      const rutasArchivos = CAMPOS_DOCUMENTOS
-        .map((campo) => obtenerRutaStorage(reg[campo]))
-        .filter((ruta): ruta is string => Boolean(ruta));
-
+      const rutasArchivos = CAMPOS_DOCUMENTOS.map((campo) =>
+        obtenerRutaStorage(reg[campo])
+      ).filter((ruta): ruta is string => Boolean(ruta));
 
       if (rutasArchivos.length > 0) {
         const rutasSinRepetir = [...new Set(rutasArchivos)];
@@ -323,7 +339,6 @@ export default function Historial() {
     };
   };
 
-
   const obtenerRutaStorage = (url: unknown) => {
     if (typeof url !== "string" || !url || url === "N/A") return null;
 
@@ -419,7 +434,6 @@ export default function Historial() {
           continue;
         }
 
-
         if (esEspecifico && valorActual === "N/A") {
           cambios[campo] = null;
         }
@@ -433,7 +447,6 @@ export default function Historial() {
       if (errorActualizacion) {
         throw new Error(errorActualizacion.message);
       }
-
 
       if (rutasAntiguas.length > 0) {
         const rutasUnicas = [...new Set(rutasAntiguas)];
@@ -455,12 +468,10 @@ export default function Historial() {
       setDocumentosEliminados({});
       alert("Registro y documentos actualizados correctamente.");
     } catch (error: any) {
-
       if (rutasNuevas.length > 0) {
         try {
           await supabase.storage.from(STORAGE_BUCKET).remove(rutasNuevas);
-        } catch {
-        }
+        } catch {}
       }
 
       console.error(error);
